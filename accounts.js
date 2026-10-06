@@ -40,14 +40,25 @@ function signIn(email) {
   };
 }
 
+function showAccountError(message) {
+  document.getElementById('accounts_status').textContent = message;
+}
+
 function populate(response) {
   // Create the GUI from the strange nested Array structure that Google accounts responds with
+  if (!Array.isArray(response?.[1])) {
+    showAccountError(response?.error || 'Could not load Google accounts. Try again.');
+    return;
+  }
+  document.getElementById('accounts_status').textContent = '';
   const accounts = response[1].map((info) => ({
-    index: info[7],
+    index: Number(info[7]),
     name: info[2],
     email: info[3],
     profileUrl: info[4],
-    isLoggedIn: info.length >= 16, // If the account is signed in (as far as I know)
+    isLoggedIn: info[7] != null && info[7] !== '' && Number(info[7]) >= 0
+      && (info[9] == null ? info.length >= 16 : Boolean(info[9]))
+      && !info[14],
   }));
   SyncStorage.store({ accounts });
   renderNumberOfAccounts(accounts);
@@ -58,6 +69,7 @@ function renderNumberOfAccounts(accounts) {
   const accountButton = document.getElementById("accounts_button");
   const numberOfAccounts = document.createElement("span");
   numberOfAccounts.innerHTML = ` (${accounts.length})`;
+  accountButton.querySelector('span')?.remove();
   accountButton.appendChild(numberOfAccounts);
 }
 
@@ -95,9 +107,13 @@ function renderAccounts(accounts, defaultAccount) {
       cellContent
         .querySelector(".cell-body")
         .addEventListener("click", async () => {
-          SyncStorage.store({ defaultAccount: user.index }, function () {
-            redirectCurrentTab(user.index);
-            window.close();
+          SyncStorage.store({ defaultAccount: user.index }, async function () {
+            try {
+              await redirectCurrentTab(user.index);
+              window.close();
+            } catch (error) {
+              showAccountError(error.message);
+            }
           });
         });
     }
@@ -111,7 +127,13 @@ SyncStorage.get(["accounts", "defaultAccount"], (data) => {
     // render accounts that are in the store, if any
     renderAccounts(data.accounts, defAccount);
   }
-  chrome.runtime.sendMessage("fetch_google_accounts", populate);
+  chrome.runtime.sendMessage("fetch_google_accounts", (response) => {
+    if (chrome.runtime.lastError) {
+      showAccountError(chrome.runtime.lastError.message);
+      return;
+    }
+    populate(response);
+  });
 });
 
 function openPage(evt, name) {

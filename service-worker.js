@@ -1,6 +1,6 @@
 // Service Worker for Default Account+ for Google (Manifest V3)
 
-import { buildRedirectRules } from './redirect-rules.js';
+import { buildRedirectRules, getAccountByIndex } from './redirect-rules.js';
 
 // ============================================================
 // Storage Helper Class
@@ -55,32 +55,35 @@ function isAnyGoogleUrl(url) {
 function convertToRedirectUrl(originalUrl, defaultAccount) {
   try {
     const url = new URL(originalUrl);
-    const params = new URLSearchParams(url.search);
-    // check if current user is not the same (?authuser={num} or /u/{num}/)
-    if (`${params.get('authuser')}` === `${defaultAccount}`) return null;
-    const uMatch = originalUrl.match(/\/u\/(\d+)\/?/i);
-    if (uMatch && uMatch[1] && `${uMatch[1]}` === `${defaultAccount}`)
-      return null;
-
-    // current user is different, change
-    params.delete('authuser');
-    params.set('authuser', defaultAccount);
-    url.search = params.toString();
+    const account = String(defaultAccount);
+    // Google's /u/N/ route takes precedence over the authuser query parameter.
+    // Update both when switching an already open service, preserving its view.
+    const pathMatch = url.pathname.match(/\/u\/(\d+)(?=\/|$)/);
+    const authuser = url.searchParams.get('authuser');
+    if (pathMatch) {
+      if (pathMatch[1] === account && (authuser === null || authuser === account)) return null;
+      url.pathname = url.pathname.replace(/\/u\/\d+(?=\/|$)/, `/u/${account}`);
+      if (authuser !== null) url.searchParams.set('authuser', account);
+    } else {
+      if (authuser === account) return null;
+      url.searchParams.set('authuser', account);
+    }
     return url.toString();
   } catch {
     return null;
   }
 }
 
-function redirectCurrentTab(defaultAccount) {
-  chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
-    if (tabs && tabs[0] && isGoogleServiceUrl(tabs[0].url)) {
-      const url = convertToRedirectUrl(tabs[0].url, defaultAccount);
-      if (url) {
-        chrome.tabs.update(tabs[0].id, { url });
-      }
-    }
-  });
+async function redirectCurrentTab(defaultAccount, serviceUrl) {
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = tabs?.[0];
+  if (!tab?.url || !isGoogleServiceUrl(tab.url)) return;
+  if (serviceUrl) {
+    const host = new URL(tab.url).hostname;
+    if (host !== serviceUrl && !host.endsWith(`.${serviceUrl}`)) return;
+  }
+  const url = convertToRedirectUrl(tab.url, defaultAccount);
+  if (url) await chrome.tabs.update(tab.id, { url });
 }
 
 
@@ -123,8 +126,8 @@ async function parseAccountsWithOffscreen(rawText) {
         reject(new Error(chrome.runtime.lastError.message));
         return;
       }
-      if (response.error) {
-        reject(new Error(response.error));
+      if (!response || response.error) {
+        reject(new Error(response?.error || 'No account parser response'));
         return;
       }
       resolve(response.result);
@@ -140,34 +143,37 @@ async function parseAccountsWithOffscreen(rawText) {
 
 const RULE_ID_BASE = 1000;
 const MAX_RULES = 100;
-let isUpdatingRules = false;
+let rulesUpdatePromise = null;
+let rulesUpdateRequested = false;
 
-async function updateRedirectRules() {
-  if (isUpdatingRules) return;
-  isUpdatingRules = true;
+function updateRedirectRules() {
+  rulesUpdateRequested = true;
+  if (rulesUpdatePromise) return rulesUpdatePromise;
 
-  try {
-    const data = await SyncStorage.getAsync(['defaultAccount', 'rules', 'accounts']);
+  rulesUpdatePromise = (async () => {
+    // Storage may change while Chrome is installing the previous snapshot.
+    // Coalesce requests, then read and apply the latest settings before resolving.
+    while (rulesUpdateRequested) {
+      rulesUpdateRequested = false;
+      const data = await SyncStorage.getAsync(['defaultAccount', 'rules', 'accounts']);
+      const newRules = buildRedirectRules({
+        defaultAccount: data.defaultAccount ?? 0,
+        customRules: data.rules ?? [],
+        accounts: data.accounts ?? [],
+        ruleIdBase: RULE_ID_BASE
+      });
+      const existingRules = await chrome.declarativeNetRequest.getDynamicRules();
+      await chrome.declarativeNetRequest.updateDynamicRules({
+        removeRuleIds: existingRules.map(rule => rule.id),
+        addRules: newRules.slice(0, MAX_RULES)
+      });
+    }
+  })().finally(() => { rulesUpdatePromise = null; });
+  return rulesUpdatePromise;
+}
 
-    const newRules = buildRedirectRules({
-      defaultAccount: data.defaultAccount ?? 0,
-      customRules: data.rules ?? [],
-      accounts: data.accounts ?? [],
-      ruleIdBase: RULE_ID_BASE
-    });
-
-    const existingRules = await chrome.declarativeNetRequest.getDynamicRules();
-    const existingRuleIds = existingRules.map(rule => rule.id);
-
-    await chrome.declarativeNetRequest.updateDynamicRules({
-      removeRuleIds: existingRuleIds,
-      addRules: newRules.slice(0, MAX_RULES)
-    });
-
-    console.log(`Updated ${newRules.length} redirect rules`);
-  } finally {
-    isUpdatingRules = false;
-  }
+function scheduleRedirectRulesUpdate() {
+  updateRedirectRules().catch(error => console.error('Failed to update redirect rules:', error));
 }
 
 // ============================================================
@@ -188,14 +194,14 @@ chrome.runtime.onInstalled.addListener(function (details) {
   }
 
   // Update rules on install/update
-  updateRedirectRules();
+  scheduleRedirectRulesUpdate();
 });
 
 // Listen for storage changes and update rules accordingly
 chrome.storage.onChanged.addListener(function (changes, namespace) {
   if (namespace === 'sync') {
     if ('defaultAccount' in changes || 'rules' in changes || 'accounts' in changes) {
-      updateRedirectRules();
+      scheduleRedirectRulesUpdate();
     }
   }
 });
@@ -204,12 +210,27 @@ chrome.storage.onChanged.addListener(function (changes, namespace) {
 // Message Handling
 // ============================================================
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === 'apply_redirect_rules') {
+    if (!Number.isInteger(message.accountId) || message.accountId < 0) {
+      sendResponse({ error: 'Invalid account number' });
+      return;
+    }
+    updateRedirectRules()
+      .then(() => redirectCurrentTab(message.accountId, message.serviceUrl))
+      .then(() => sendResponse({ success: true }))
+      .catch(error => sendResponse({ error: error.message }));
+    return true;
+  }
+
   if (message === 'fetch_google_accounts') {
     const url =
       'https://accounts.google.com/ListAccounts?gpsia=1&source=ogb&mo=1&origin=https://accounts.google.com';
 
-    fetch(url)
-      .then((response) => response.text())
+    fetch(url, { credentials: 'include', cache: 'no-store' })
+      .then((response) => {
+        if (!response.ok) throw new Error(`Google returned HTTP ${response.status}`);
+        return response.text();
+      })
       .then(async (rawText) => {
         try {
           // Use offscreen document for parsing
@@ -229,16 +250,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 .replace(/\\n/g, '');
               sendResponse(JSON.parse(decoded));
             } else {
-              sendResponse([]);
+              sendResponse({ error: 'Could not load Google accounts. Try again.' });
             }
           } catch {
-            sendResponse([]);
+            sendResponse({ error: 'Could not load Google accounts. Try again.' });
           }
         }
       })
       .catch((error) => {
         console.error('Failed to fetch accounts:', error);
-        sendResponse([]);
+        sendResponse({ error: 'Could not load Google accounts. Try again.' });
       });
 
     return true; // Keep the message channel open for async response
@@ -278,7 +299,7 @@ chrome.tabs.onCreated.addListener(async (tab) => {
   }
 
   // Skip if account 0 or not logged in
-  if (accountId === 0 || !accounts[accountId]?.isLoggedIn) {
+  if (accountId === 0 || !getAccountByIndex(accounts, accountId)?.isLoggedIn) {
     return;
   }
 
@@ -309,8 +330,8 @@ chrome.commands.onCommand.addListener((command) => {
       const accNum = parseInt(command.charAt(command.length - 1)) - 1;
       SyncStorage.get('accounts', (data) => {
         // redirect only if accNum is not > than total number of accounts
-        if (data.accounts && data.accounts.length > accNum) {
-          redirectCurrentTab(accNum);
+        if (getAccountByIndex(data.accounts ?? [], accNum)?.isLoggedIn) {
+          redirectCurrentTab(accNum).catch(error => console.error('Failed to switch account:', error));
         }
       });
     } catch {
@@ -323,5 +344,5 @@ chrome.commands.onCommand.addListener((command) => {
 // Service Worker Startup
 // ============================================================
 // Initialize rules when service worker starts
-updateRedirectRules();
+scheduleRedirectRulesUpdate();
 

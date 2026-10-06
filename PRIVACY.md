@@ -1,6 +1,6 @@
 # Privacy Policy
 
-**Last updated: January 15, 2026**
+**Last updated: October 6, 2026**
 
 ## Overview
 
@@ -8,19 +8,21 @@ Default Account+ for Google ("the Extension") is committed to protecting your pr
 
 ## Data Collection
 
-**The Extension does not collect, store, or transmit any personal data.**
+The extension reads your Google account list to let you choose an account. It caches account names, email addresses, profile-image URLs, account numbers, and sign-in status in your browser's `chrome.storage.sync`, together with your account preferences. If browser sync is enabled, this storage may be synchronized by your browser's sync service.
 
 ## What the Extension Does
 
-The Extension stores only your preferences locally in your browser:
+The extension stores:
 - Your default Google account selection
 - Per-service account preferences (e.g., which account to use for Gmail vs Drive)
+- The cached Google account list used by the account picker
 
 This data is stored using Chrome's built-in `chrome.storage.sync` API and is:
 - Stored locally on your device
-- Synced only to your own Chrome profile (if you have Chrome sync enabled)
-- Never transmitted to any external servers
-- Never shared with third parties
+- Synced to your own browser profile if browser sync is enabled
+- Not sent to the extension author or to analytics or advertising services
+
+To refresh the account list, the extension requests `https://accounts.google.com/ListAccounts` using your existing Google session. It also navigates Google services to the account you select. It does not export your session cookies or store passwords.
 
 ## Permissions Explained
 
@@ -40,9 +42,9 @@ Any changes to this privacy policy will be posted in the Extension's GitHub repo
 ## Contact
 
 If you have questions about this privacy policy, please open an issue at:
-https://github.com/badrisnarayanan/default.wtf/issues
+https://github.com/Adiker/default.wtf/issues
 
 ## Open Source
 
 This Extension is open source. You can review the complete source code at:
-https://github.com/badrisnarayanan/default.wtf
+https://github.com/Adiker/default.wtf

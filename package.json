@@ -1,23 +1,25 @@
 {
   "name": "default_account_for_google",
-  "version": "1.0.0",
+  "version": "2.1.3",
   "description": "A maintained fork of [default.wtf](https://github.com/uptechteam/default.wtf) updated for **Manifest V3** and modern Chrome versions.",
   "scripts": {
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:browser": "node tests/browser.smoke.cjs"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/badrisnarayanan/default.wtf.git"
+    "url": "git+https://github.com/Adiker/default.wtf.git"
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "BSD-3-Clause",
   "type": "commonjs",
   "bugs": {
-    "url": "https://github.com/badrisnarayanan/default.wtf/issues"
+    "url": "https://github.com/Adiker/default.wtf/issues"
   },
-  "homepage": "https://github.com/badrisnarayanan/default.wtf#readme",
+  "homepage": "https://github.com/Adiker/default.wtf#readme",
   "devDependencies": {
+    "playwright-core": "^1.63.0",
     "vitest": "^4.0.18"
   }
 }

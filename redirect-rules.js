@@ -118,12 +118,19 @@ export function allSupportedGoogleServices() {
 
 // Build declarativeNetRequest rules from config
 // Returns an array of rule objects ready for chrome.declarativeNetRequest.updateDynamicRules
+export function getAccountByIndex(accounts, index) {
+  // Google's account number is not necessarily its position in ListAccounts
+  // (signed-out entries can be interleaved with active accounts).
+  return accounts.find(account => Number(account.index) === Number(index))
+    ?? accounts.find((account, position) => account.index == null && position === Number(index));
+}
+
 export function buildRedirectRules({ defaultAccount, customRules = [], accounts, ruleIdBase = 1000 }) {
   const services = allSupportedGoogleServices();
   const rules = [];
   let ruleId = ruleIdBase;
 
-  const isAccountLoggedIn = (idx) => Boolean(accounts[idx]?.isLoggedIn);
+  const isAccountLoggedIn = (idx) => Boolean(getAccountByIndex(accounts, idx)?.isLoggedIn);
 
   const getAccountIdForService = (service) => {
     const custom = customRules.find(r =>
@@ -148,7 +155,7 @@ export function buildRedirectRules({ defaultAccount, customRules = [], accounts,
           }
         },
         condition: {
-          regexFilter: `^https?://(www\\.)?gmail\\.com.*`,
+          regexFilter: `^https?://(www\\.)?gmail\\.com(/|$)`,
           resourceTypes: ['main_frame']
         }
       });

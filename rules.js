@@ -8,7 +8,7 @@ function setupUI() {
       a.name.toLowerCase() > b.name.toLowerCase() ? 1 : -1
     );
     allAccounts((data) => {
-      const accounts = data.accounts ?? [];
+      const accounts = (data.accounts ?? []).filter(account => account.isLoggedIn);
       renderAddNewRule(services, accounts);
     });
     renderRulesList(rules);
@@ -68,6 +68,7 @@ function renderAddNewRule(services, accounts) {
   actionButtonDiv.innerHTML = "";
   const button = document.createElement("button");
   button.appendChild(document.createTextNode("Add new rule"));
+  button.disabled = services.length === 0 || accounts.length === 0;
   button.onclick = function () {
     const serviceValue = JSON.parse(
       servicePicker.options[servicePicker.selectedIndex].value
@@ -92,8 +93,13 @@ function renderAddNewRule(services, accounts) {
         accountEmail,
         accountId,
       },
-      function () {
+      async function () {
         setupUI();
+        try {
+          await redirectCurrentTab(accountId, serviceUrl);
+        } catch (error) {
+          showAccountError(error.message);
+        }
       }
     );
   };

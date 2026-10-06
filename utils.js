@@ -37,29 +37,33 @@ function isAnyGoogleUrl(url) {
 function convertToRedirectUrl(originalUrl, defaultAccount) {
   try {
     const url = new URL(originalUrl);
-    const params = new URLSearchParams(url.search);
-    if (`${params.get('authuser')}` === `${defaultAccount}`) return null;
-    const uMatch = originalUrl.match(/\/u\/(\d+)\/?/i);
-    if (uMatch && uMatch[1] && `${uMatch[1]}` === `${defaultAccount}`)
-      return null;
-
-    params.delete('authuser');
-    params.set('authuser', defaultAccount);
-    url.search = params.toString();
+    const account = String(defaultAccount);
+    // Google's /u/N/ route takes precedence over the authuser query parameter.
+    // Update both when switching an already open service, preserving its view.
+    const pathMatch = url.pathname.match(/\/u\/(\d+)(?=\/|$)/);
+    const authuser = url.searchParams.get('authuser');
+    if (pathMatch) {
+      if (pathMatch[1] === account && (authuser === null || authuser === account)) return null;
+      url.pathname = url.pathname.replace(/\/u\/\d+(?=\/|$)/, `/u/${account}`);
+      if (authuser !== null) url.searchParams.set('authuser', account);
+    } else {
+      if (authuser === account) return null;
+      url.searchParams.set('authuser', account);
+    }
     return url.toString();
   } catch {
     return null;
   }
 }
 
-function redirectCurrentTab(defaultAccount) {
-  chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
-    if (tabs && tabs[0] && isGoogleServiceUrl(tabs[0].url)) {
-      const url = convertToRedirectUrl(tabs[0].url, defaultAccount);
-      if (url) {
-        chrome.tabs.update(tabs[0].id, { url });
-      }
-    }
+function redirectCurrentTab(defaultAccount, serviceUrl) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({ type: 'apply_redirect_rules', accountId: defaultAccount, serviceUrl }, (response) => {
+      const error = chrome.runtime.lastError?.message || response?.error
+        || (!response?.success ? 'Could not apply account settings. Try again.' : null);
+      if (error) reject(new Error(error));
+      else resolve();
+    });
   });
 }
 

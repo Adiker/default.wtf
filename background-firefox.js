@@ -45,10 +45,24 @@ chrome.storage.onChanged.addListener(function (changes, namespace) {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === 'apply_redirect_rules') {
+    if (!Number.isInteger(message.accountId) || message.accountId < 0) {
+      sendResponse({ error: 'Invalid account number' });
+      return;
+    }
+    SyncStorage.get(['defaultAccount', 'rules', 'accounts'], (data) => {
+      defaultAccount = data.defaultAccount ?? 0;
+      rules = data.rules ?? [];
+      accounts = data.accounts ?? [];
+      applyAccountToCurrentTab(message.accountId, message.serviceUrl, sendResponse);
+    });
+    return true;
+  }
+
   if (message === "fetch_google_accounts") {
     const url =
       "https://accounts.google.com/ListAccounts?gpsia=1&source=ogb&mo=1&origin=https://accounts.google.com";
-    fetch(url)
+    fetch(url, { credentials: "include", cache: "no-store" })
       .then((response) => response.text())
       .then(function (rawText) {
         const parser = new DOMParser();
@@ -64,10 +78,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           .replace(/\\n/g, "");
       })
       .then((text) => JSON.parse(text))
-      .then(sendResponse);
+      .then(sendResponse)
+      .catch(() => sendResponse({ error: 'Could not load Google accounts. Try again.' }));
     return true;
   }
 });
+
+
+function applyAccountToCurrentTab(accountId, serviceUrl, callback = () => {}) {
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    const tab = tabs?.[0];
+    if (!tab?.url || !isGoogleServiceUrl(tab.url)) {
+      callback({ success: true });
+      return;
+    }
+    const host = new URL(tab.url).hostname;
+    if (serviceUrl && host !== serviceUrl && !host.endsWith(`.${serviceUrl}`)) {
+      callback({ success: true });
+      return;
+    }
+    const url = convertToRedirectUrl(tab.url, accountId);
+    if (!url) {
+      callback({ success: true });
+      return;
+    }
+    chrome.tabs.update(tab.id, { url }, () => {
+      callback(chrome.runtime.lastError
+        ? { error: chrome.runtime.lastError.message } : { success: true });
+    });
+  });
+}
 
 // collect last 4 redirectUrls
 let last4RedirectUrls = [];
@@ -155,8 +195,8 @@ chrome.commands.onCommand.addListener((command) => {
       const accNum = parseInt(command.charAt(command.length - 1)) - 1;
       SyncStorage.get("accounts", (data) => {
         // redirect only if accNum is not > than total number of accounts
-        if (data.accounts && data.accounts.length > accNum) {
-          redirectCurrentTab(accNum);
+        if ((data.accounts ?? []).some(account => account.index === accNum && account.isLoggedIn)) {
+          applyAccountToCurrentTab(accNum);
         }
       });
     } catch {}
@@ -165,7 +205,7 @@ chrome.commands.onCommand.addListener((command) => {
 
 // checks if the account is logged in (to redirect only logged in Accounts)
 function isAccountLoggedIn(accountIndex) {
-  return Boolean(accounts[accountIndex]?.isLoggedIn);
+  return Boolean(accounts.find(account => Number(account.index) === accountIndex)?.isLoggedIn);
 }
 
 function getAccountForService(url) {

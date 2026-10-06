@@ -347,3 +347,32 @@ describe('Rule priority resolution', () => {
     });
   });
 });
+
+
+describe('Configured account overrides authuser links', () => {
+  const rules = buildRedirectRules({
+    defaultAccount: 1,
+    customRules: [{ serviceName: 'Meet', serviceUrl: 'meet.google.com', accountId: 2 }],
+    accounts: [0, 1, 2].map(index => ({ index, isLoggedIn: true })),
+  });
+
+  it.each([
+    'https://meet.google.com/home?authuser=1',
+    'https://meet.google.com/home?authuser=0',
+    'https://meet.google.com/home?hl=pl&authuser=1',
+    'https://meet.google.com/home?authuser=test%40example.test',
+    'https://meet.google.com/home?authuser=2',
+  ])('uses the Meet service rule for %s', url => {
+    const rule = findMatchingRule(rules, url);
+    expect(rule.action.type).toBe('redirect');
+    expect(rule.action.redirect.transform.queryTransform.addOrReplaceParams)
+      .toEqual([{ key: 'authuser', value: '2' }]);
+  });
+
+  it('uses the global default for a service without an override', () => {
+    const rule = findMatchingRule(rules, 'https://analytics.google.com/?authuser=2');
+    expect(rule.action.type).toBe('redirect');
+    expect(rule.action.redirect.transform.queryTransform.addOrReplaceParams)
+      .toEqual([{ key: 'authuser', value: '1' }]);
+  });
+});
